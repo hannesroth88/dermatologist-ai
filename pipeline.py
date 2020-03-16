@@ -6,7 +6,8 @@ import torch.nn.functional as F
 import numpy as np
 import torchvision.models as models
 import torch.nn as nn
-from config import Config as config
+from torch.backends import cudnn
+
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import time
@@ -15,12 +16,12 @@ import matplotlib.pyplot as plt
 
 class Pipeline(object):
 
-    def train(self, config, loaders, model, optimizer, criterion, save_path, lr_scheduler=None):
+    def train(self, config, loaders, model, optimizer, criterion, lr_scheduler=None):
         print('')
         print('####################')
         print('Train and Validate Model')
         print('####################')
-        print('Start:', str(datetime.datetime.now()))
+        print('Start Training:', str(datetime.datetime.now()))
 
         # initialize tracker for minimum validation loss
         valid_loss_min = np.Inf
@@ -29,8 +30,10 @@ class Pipeline(object):
         # Time tracking start
         time_start = time.time()
 
+        # uses the inbuilt cudnn auto-tuner to find the fastest convolution algorithms.
+        cudnn.benchmark = 'true'
+
         for epoch in range(1, config.epochs + 1):
-            print("Start epoch:", epoch)
             # do iteration with lots of work here
             # initialize variables to monitor training and validation loss
             # do long-running work here
@@ -44,11 +47,12 @@ class Pipeline(object):
             # train the model #
             ###################
             model.train()
-            for batch_idx, (data, target) in enumerate(loaders['train']):
+            for batch_idx, (data, target, path) in enumerate(loaders['train']):
                 # move to GPU
                 if config.use_cuda:
+                    print("CUDA: moving data, target to GPU")
                     data, target = data.cuda(), target.cuda()
-                ## find the loss and update the model parameters accordingly
+                # find the loss and update the model parameters accordingly
                 # clear the gradients of all optimized variables
                 optimizer.zero_grad()
                 # forward pass: compute predicted outputs by passing inputs to the model
@@ -71,9 +75,10 @@ class Pipeline(object):
             # validate the model #
             ######################
             model.eval()
-            for batch_idx, (data, target) in enumerate(loaders['valid']):
+            for batch_idx, (data, target, path) in enumerate(loaders['valid']):
                 # move to GPU
                 if config.use_cuda:
+                    print("CUDA: moving data, target to GPU")
                     data, target = data.cuda(), target.cuda()
                 # update the average validation loss
                 # forward pass: compute predicted outputs by passing inputs to the model
@@ -104,11 +109,12 @@ class Pipeline(object):
                 print('Validation loss decreased ({:.6f} --> {:.6f}).  Saving model ...'.format(
                     valid_loss_min,
                     valid_loss))
-                torch.save(model.state_dict(), save_path)
+                torch.save(model.state_dict(),
+                           './results/' + config.model_name + '/model_' + config.model_index + '.pt')
                 valid_loss_min = valid_loss
 
             losses = {'train_losses': train_losses, 'valid_losses': valid_losses}
-            torch.save(losses, './results/losses.pt')
+            torch.save(losses, './results/' + config.model_name + '/losses_' + config.model_index + '.pt')
 
         # Show result
         print(
@@ -175,7 +181,7 @@ class Pipeline(object):
         print('Test Accuracy: %2d%% (%2d/%2d)' % (
             100. * correct / total, correct, total))
 
-    def testModelAndWriteCsv(self, model, loaders, path_csv):
+    def testModelAndWriteCsv(self, config, model, loaders, path_csv):
 
         print('')
         print('####################')
@@ -196,12 +202,14 @@ class Pipeline(object):
                     data, target = data.cuda(), target.cuda()
                 # forward pass: compute predicted outputs by passing inputs to the model
                 output = model(data)
+
                 # convert output probabilities to predicted class
                 # pred = output.data.max(1, keepdim=True)[1]
-                # pred_melanoma = F.relu(output.data[0, 0])
-                # pred_seborrheic_keratosis = F.relu(output.data[0, 2])
-                pred_melanoma = output.data[0, 0]
-                pred_seborrheic_keratosis = output.data[0, 2]
+                pred = F.softmax(output.data, dim=1)
+                pred_melanoma = pred[0, 0]
+                pred_seborrheic_keratosis = pred[0, 2]
+                # pred_melanoma = output.data[0, 0]
+                # pred_seborrheic_keratosis = output.data[0, 2]
                 # print('Id:', path, '    task_1:', str(pred_melanoma.cpu().numpy()), '    task_2:', str(pred_seborrheic_keratosis.cpu().numpy()), '    label', str(target.data.cpu().numpy()[0]))
                 # target = target.cpu().numpy()
                 writer.writerow(
@@ -211,3 +219,28 @@ class Pipeline(object):
 
                 if batch_idx % 10 == 0:
                     print("write next line (", batch_idx, "/600)")
+
+    def getScores(self, path_csv):
+        import pandas as pd
+        import sys
+        import itertools
+        import get_results as results
+
+        threshold = 0.5
+
+        # get ground truth labels for test dataset
+        truth = pd.read_csv('ground_truth.csv')
+        print(truth)
+        y_true = truth.as_matrix(columns=["task_1", "task_2"])
+        # y_true = truth[["task_1", "task_2"]]
+
+        # get model predictions for test dataset
+        y_pred = pd.read_csv(path_csv)
+        y_pred = y_pred.as_matrix(columns=["task_1", "task_2"])
+        # y_pred = y_pred[["task_1", "task_2"]]
+
+        # plot ROC curves and print scores
+        results.plot_roc_auc(y_true, y_pred)
+        # plot confusion matrix
+        classes = ['benign', 'malignant']
+        results.plot_confusion_matrix(y_true[:, 0], y_pred[:, 0], threshold, classes)

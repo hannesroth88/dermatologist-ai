@@ -9,6 +9,9 @@ from dataloaders import DataLoaders
 from model_architecture import ModelArchitecture
 from pipeline import Pipeline
 import pprint
+import numpy as np
+import torchvision
+from torch.utils.tensorboard import SummaryWriter
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
@@ -45,6 +48,9 @@ class Application(object):
         print('####################')
 
     def start(self):
+        torch.manual_seed(0)
+        np.random.seed(0)
+
         # Create dataloaders and update to self
         dataloaders = DataLoaders()
         self.loaders, self.dataset_sizes, self.class_names = dataloaders.createDataloaders(self.config)
@@ -52,23 +58,25 @@ class Application(object):
         # Create Model
         modelArchitecture = ModelArchitecture()
         self.model = modelArchitecture.createModelResnet18(self.config, self.class_names)
-        self.optimizer, self.scheduler_transfer, self.criterion = modelArchitecture.setOptimizer(self.model,
-                                                                                                 self.config.learning_rate)
+        self.optimizer, self.scheduler, self.criterion = modelArchitecture.setOptimizer(self.model,
+                                                                                        self.config.learning_rate)
         # print(self.model)
 
         pipeline = Pipeline()
         # Train Model
-        # self.model = pipeline.train(self.config, self.loaders, self.model, self.optimizer, self.criterion,
-        #                             './results/model.pt')
+        self.model = pipeline.train(self.config, self.loaders, self.model, self.optimizer, self.criterion, lr_scheduler=self.scheduler)
 
         # Plot Losses
-        # pipeline.plotLosses('./results/Resnet18/losses_1.pt')
+        pipeline.plotLosses('./results/' + config.model_name + '/losses_' + config.model_index + '.pt')
 
         # Test Model
         # load the model that got the best validation accuracy
-        self.model.load_state_dict(torch.load('./results/Resnet18/model_1.pt'))
-        pipeline.testModelAndWriteCsv(self.model, self.loaders, './results/Resnet18/test_1.csv')
-        # pipeline.testModelAccuracy(self.config, self.loaders, self.model, self.criterion)
+        self.model.load_state_dict(torch.load('./results/' + config.model_name + '/model_' + config.model_index + '.pt'))
+        pipeline.testModelAndWriteCsv(self.config, self.model, self.loaders, './results/' + config.model_name + '/test_' + config.model_index + '.csv')
+        pipeline.testModelAccuracy(self.config, self.loaders, self.model, self.criterion)
+
+        # Get Scores
+        pipeline.getScores('./results/' + config.model_name + '/test_' + config.model_index + '.csv')
 
 
 App = Application()
